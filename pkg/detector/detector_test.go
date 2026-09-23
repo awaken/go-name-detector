@@ -1,6 +1,8 @@
 package detector
 
 import (
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/montevive/go-name-detector/pkg/types"
@@ -225,7 +227,7 @@ func TestDetectPII_AccentedNames(t *testing.T) {
 			result := detector.DetectPIIWithThreshold(tt.words, tt.threshold)
 
 			if result.IsLikelyName != tt.expectedResult {
-				t.Errorf("Expected IsLikelyName=%v, got %v (confidence: %v)", 
+				t.Errorf("Expected IsLikelyName=%v, got %v (confidence: %v)",
 					tt.expectedResult, result.IsLikelyName, result.Confidence)
 			}
 
@@ -243,7 +245,7 @@ func TestDetectPII_AccentedNames(t *testing.T) {
 				}
 			}
 
-			t.Logf("Result: IsLikelyName=%v, Confidence=%.3f, First=%v, Last=%v", 
+			t.Logf("Result: IsLikelyName=%v, Confidence=%.3f, First=%v, Last=%v",
 				result.IsLikelyName, result.Confidence, result.Details.FirstNames, result.Details.Surnames)
 		})
 	}
@@ -254,22 +256,22 @@ func TestDetectPII_EdgeCases(t *testing.T) {
 	detector := New(dataset)
 
 	tests := []struct {
-		name  string
-		words []string
+		name      string
+		words     []string
 		expectLow bool // Whether we expect low confidence
 	}{
 		{"Empty input", []string{}, true},
 		{"Single word", []string{"Jose"}, true},
 		{"Too many words", []string{"A", "B", "C", "D", "E", "F", "G"}, true},
 		{"Empty strings", []string{"", "Jose", "", "Garcia", ""}, false}, // After cleanup = ["Jose", "Garcia"] = valid names!
-		{"Numbers", []string{"John", "123", "Smith"}, false}, // After cleanup = ["John", "Smith"] = valid names!
-		{"Special characters", []string{"Jose@", "Garcia!"}, true}, // Invalid characters
+		{"Numbers", []string{"John", "123", "Smith"}, false},             // After cleanup = ["John", "Smith"] = valid names!
+		{"Special characters", []string{"Jose@", "Garcia!"}, true},       // Invalid characters
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := detector.DetectPII(tt.words)
-			
+
 			if tt.expectLow {
 				// These should return false or low confidence
 				if result.IsLikelyName && result.Confidence > 0.5 {
@@ -294,14 +296,14 @@ func TestDetectPII_Thresholds(t *testing.T) {
 
 	for _, threshold := range thresholds {
 		result := detector.DetectPIIWithThreshold(words, threshold)
-		
+
 		if result.Confidence >= threshold && !result.IsLikelyName {
-			t.Errorf("Confidence %v >= threshold %v but IsLikelyName is false", 
+			t.Errorf("Confidence %v >= threshold %v but IsLikelyName is false",
 				result.Confidence, threshold)
 		}
-		
+
 		if result.Confidence < threshold && result.IsLikelyName {
-			t.Errorf("Confidence %v < threshold %v but IsLikelyName is true", 
+			t.Errorf("Confidence %v < threshold %v but IsLikelyName is true",
 				result.Confidence, threshold)
 		}
 	}
@@ -373,5 +375,26 @@ func BenchmarkDetectPII_MixedAccents(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		detector.DetectPII(words)
+	}
+}
+
+func TestScoreMatchesDetails(t *testing.T) {
+	d := New(&types.NameDataset{
+		FirstNames: map[string]*types.NameData{
+			"JOHN": {Country: map[string]float32{"US": 1}, Gender: map[string]float32{"M": 1}, Rank: map[string]int32{"US": 1}},
+			"JOSE": {Country: map[string]float32{"ES": 1}, Rank: map[string]int32{"ES": 30}},
+		},
+		LastNames: map[string]*types.NameData{
+			"SMITH":  {Country: map[string]float32{"US": 1}, Rank: map[string]int32{"US": 1}},
+			"GARCIA": {Country: map[string]float32{"ES": 1}, Rank: map[string]int32{"ES": 1}},
+		},
+	})
+	for _, text := range []string{"", "John", "the of", "John Smith", "John qqqq", "qqqq zzzz", "José García", "John John Smith", "John Smith 123", "the John Smith", "John de Smith", "John John John Smith Smith Smith", "John John John John Smith Smith Smith"} {
+		words := strings.Fields(text)
+		full := d.DetectPII(words)
+		score, used := d.Score(words)
+		if math.Abs(score-full.Confidence) > 1e-9 || used != len(full.Details.FirstNames)+len(full.Details.Surnames) {
+			t.Fatalf("%q: score %v, used %v; full %+v", text, score, used, full)
+		}
 	}
 }

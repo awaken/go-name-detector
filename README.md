@@ -1,5 +1,32 @@
 # Go PII Name Detector
 
+## Flower fork
+
+This fork contains the scoring fixes and allocation optimizations used by Flower:
+
+- Role-specific rank lookup and correct top-10/top-100 bonus ordering.
+- `Detector.Score(words)` returns confidence and matched word count without
+  building descriptive metadata.
+- Stack buffers for common word checks and dictionary keys, with Unicode and
+  accent fallback preserved.
+
+Keep upstream import paths and select this fork with a module replacement:
+
+```sh
+go mod edit -replace=github.com/montevive/go-name-detector=github.com/awaken/go-name-detector@v1.0.2
+go mod tidy
+```
+
+```go
+confidence, words := d.Score([]string{"John", "Smith"})
+```
+
+The embedded dictionary returns confidence `1.0` and two matched words for that
+example. Scores remain dictionary heuristics. Dataset loading and existing APIs
+are preserved. Tests run with both `CGO_ENABLED=0` and `CGO_ENABLED=1`.
+
+The upstream documentation follows.
+
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.16-blue.svg)](https://golang.org/dl/)
 [![Release](https://img.shields.io/github/v/release/montevive/go-name-detector)](https://github.com/montevive/go-name-detector/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)

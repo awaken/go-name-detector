@@ -1,3 +1,4 @@
+// Modified by Flower: correct rank bonuses and reuse bounded scoring storage.
 package detector
 
 import (
@@ -51,12 +52,13 @@ func (s *Scorer) ScoreCombination(combo types.NameCombination) float64 {
 	var componentCount int
 
 	// Score first names
-	firstNamesScore, firstNamesData := s.scoreNames(combo.FirstNames, true)
+	var firstBuf, lastBuf [6]*types.NameData
+	firstNamesScore, firstNamesData := s.scoreNames(combo.FirstNames, true, firstBuf[:0])
 	totalScore += firstNamesScore
 	componentCount += len(combo.FirstNames)
 
 	// Score surnames
-	surnamesScore, surnamesData := s.scoreNames(combo.Surnames, false)
+	surnamesScore, surnamesData := s.scoreNames(combo.Surnames, false, lastBuf[:0])
 	totalScore += surnamesScore
 	componentCount += len(combo.Surnames)
 
@@ -85,7 +87,7 @@ func (s *Scorer) ScoreCombination(combo types.NameCombination) float64 {
 	}
 
 	// Apply pattern-specific adjustments
-	averageScore = s.applyPatternAdjustments(combo, averageScore)
+	averageScore = s.applyPatternAdjustments(combo, averageScore, firstNamesData, surnamesData)
 
 	// Clamp to [0, 1]
 	if averageScore > 1.0 {
@@ -96,9 +98,8 @@ func (s *Scorer) ScoreCombination(combo types.NameCombination) float64 {
 }
 
 // scoreNames scores a list of names (either first names or surnames)
-func (s *Scorer) scoreNames(names []string, isFirstNames bool) (float64, []*types.NameData) {
+func (s *Scorer) scoreNames(names []string, isFirstNames bool, nameDataList []*types.NameData) (float64, []*types.NameData) {
 	var totalScore float64
-	var nameDataList []*types.NameData
 
 	targetMap := s.dataset.LastNames
 	if isFirstNames {
@@ -106,18 +107,7 @@ func (s *Scorer) scoreNames(names []string, isFirstNames bool) (float64, []*type
 	}
 
 	for _, name := range names {
-		// Try dual lookup: first exact case match, then normalized
-		exactKey := strings.ToUpper(strings.TrimSpace(name))
-		nameData, exists := targetMap[exactKey]
-
-		if !exists {
-			// Try with accent normalization
-			normalizedKey := normalizeForLookup(name)
-			if normalizedKey != exactKey {
-				nameData, exists = targetMap[normalizedKey]
-			}
-		}
-
+		nameData, exists := lookupName(name, targetMap)
 		if !exists {
 			// Name not found in database
 			continue
@@ -159,13 +149,13 @@ func (s *Scorer) calculatePopularityScore(nameData *types.NameData) float64 {
 	// Step-based scoring for dramatic differentiation between common vs rare names
 	switch {
 	case minRank <= 10:
-		return 1.0  // Top tier names (José, María, García, etc.)
+		return 1.0 // Top tier names (José, María, García, etc.)
 	case minRank <= 50:
-		return 0.8  // Very common names
+		return 0.8 // Very common names
 	case minRank <= 200:
-		return 0.5  // Common names
+		return 0.5 // Common names
 	case minRank <= 1000:
-		return 0.2  // Uncommon but legitimate names
+		return 0.2 // Uncommon but legitimate names
 	default:
 		return 0.02 // Very rare names (likely noise, typos, or unusual entries)
 	}
@@ -213,6 +203,21 @@ func (s *Scorer) calculateGenderConsistency(firstNamesData []*types.NameData) fl
 
 // calculateCountryOverlap calculates bonus for country overlap between first names and surnames
 func (s *Scorer) calculateCountryOverlap(firstNamesData, surnamesData []*types.NameData) float64 {
+	// Two-word names already have one distribution per role; no aggregation is needed.
+	if len(firstNamesData) == 1 && len(surnamesData) == 1 {
+		first, last := firstNamesData[0].Country, surnamesData[0].Country
+		// Probe from the smaller dictionary; overlap is symmetric.
+		if len(first) > len(last) {
+			first, last = last, first
+		}
+		var overlap float64
+		for country, firstProb := range first {
+			if lastProb, ok := last[country]; ok {
+				overlap += math.Min(float64(firstProb), float64(lastProb))
+			}
+		}
+		return s.config.CountryOverlap * overlap
+	}
 	// Aggregate country probabilities for first names
 	firstCountries := make(map[string]float32)
 	for _, nameData := range firstNamesData {
@@ -349,7 +354,7 @@ func (s *Scorer) GetGender(combo types.NameCombination) string {
 }
 
 // applyPatternAdjustments applies bonuses and penalties based on name patterns
-func (s *Scorer) applyPatternAdjustments(combo types.NameCombination, baseScore float64) float64 {
+func (s *Scorer) applyPatternAdjustments(combo types.NameCombination, baseScore float64, firstData, lastData []*types.NameData) float64 {
 	adjustedScore := baseScore
 
 	// Penalty for prepositions in first names (major red flag)
@@ -368,51 +373,24 @@ func (s *Scorer) applyPatternAdjustments(combo types.NameCombination, baseScore 
 
 	// Bonus for two-word names where both components are top-ranked
 	if len(combo.FirstNames) == 1 && len(combo.Surnames) == 1 {
-		firstRank := s.getMinRank(combo.FirstNames[0])
-		lastRank := s.getMinRank(combo.Surnames[0])
-		
-		// Both are top-100 names - likely a legitimate person
-		if firstRank <= 100 && lastRank <= 100 {
-			adjustedScore *= 1.4 // Significant boost for common name pairs
-		} else if firstRank <= 10 && lastRank <= 10 {
+		// Reuse role-specific matches instead of normalizing and looking up again.
+		firstRank, lastRank := int32(999999), int32(999999)
+		if len(firstData) == 1 {
+			firstRank = s.getMinRankFromData(firstData[0])
+		}
+		if len(lastData) == 1 {
+			lastRank = s.getMinRankFromData(lastData[0])
+		}
+
+		// Check the strongest bonus before the broader top-100 range.
+		if firstRank <= 10 && lastRank <= 10 {
 			adjustedScore *= 1.6 // Extra boost for top-10 name pairs
+		} else if firstRank <= 100 && lastRank <= 100 {
+			adjustedScore *= 1.4 // Significant boost for common name pairs
 		}
 	}
 
 	return adjustedScore
-}
-
-// getMinRank gets the minimum (best) rank for a name across all countries
-func (s *Scorer) getMinRank(name string) int32 {
-	// Try dual lookup like in scoreNames
-	exactKey := strings.ToUpper(strings.TrimSpace(name))
-	
-	// Check first names
-	if nameData, exists := s.dataset.FirstNames[exactKey]; exists {
-		return s.getMinRankFromData(nameData)
-	}
-	
-	// Try normalized lookup
-	normalizedKey := normalizeForLookup(name)
-	if normalizedKey != exactKey {
-		if nameData, exists := s.dataset.FirstNames[normalizedKey]; exists {
-			return s.getMinRankFromData(nameData)
-		}
-	}
-	
-	// Check last names
-	if nameData, exists := s.dataset.LastNames[exactKey]; exists {
-		return s.getMinRankFromData(nameData)
-	}
-	
-	// Try normalized lookup for last names
-	if normalizedKey != exactKey {
-		if nameData, exists := s.dataset.LastNames[normalizedKey]; exists {
-			return s.getMinRankFromData(nameData)
-		}
-	}
-	
-	return 999999 // Not found
 }
 
 // getMinRankFromData extracts the minimum rank from NameData
@@ -420,33 +398,28 @@ func (s *Scorer) getMinRankFromData(nameData *types.NameData) int32 {
 	if len(nameData.Rank) == 0 {
 		return 999999
 	}
-	
+
 	minRank := int32(999999)
 	for _, rank := range nameData.Rank {
 		if rank > 0 && rank < minRank {
 			minRank = rank
 		}
 	}
-	
+
 	return minRank
 }
 
 // isProbablyPreposition checks if a word is likely a preposition (used by scorer)
 func (s *Scorer) isProbablyPreposition(word string) bool {
-	lowerWord := strings.ToLower(word)
-	prepositions := map[string]bool{
-		// Spanish
-		"de": true, "del": true, "la": true, "el": true,
-		"los": true, "las": true, "y": true,
-		// Portuguese
-		"da": true, "do": true, "dos": true, "das": true,
-		// French
-		"du": true, "le": true, "les": true,
-		// Dutch/German
-		"van": true, "von": true, "der": true, "den": true,
-		// English
-		"of": true, "and": true,
+	return isNamePreposition(word)
+}
+
+func isNamePreposition(word string) bool {
+	buf, n := lowerNameWord(word)
+	switch string(buf[:n]) {
+	case "de", "del", "la", "el", "los", "las", "y", "da", "do", "dos", "das",
+		"du", "le", "les", "van", "von", "der", "den", "of", "and":
+		return true
 	}
-	
-	return prepositions[lowerWord]
+	return false
 }

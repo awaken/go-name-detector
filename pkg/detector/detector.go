@@ -1,3 +1,4 @@
+// Modified by Flower: provide scoring without details and avoid per-word maps.
 package detector
 
 import (
@@ -18,7 +19,7 @@ type Detector struct {
 func New(dataset *types.NameDataset) *Detector {
 	config := DefaultScoreConfig()
 	scorer := NewScorer(dataset, config)
-	
+
 	return &Detector{
 		scorer: scorer,
 	}
@@ -27,7 +28,7 @@ func New(dataset *types.NameDataset) *Detector {
 // NewWithConfig creates a new Detector with custom scoring configuration
 func NewWithConfig(dataset *types.NameDataset, config ScoreConfig) *Detector {
 	scorer := NewScorer(dataset, config)
-	
+
 	return &Detector{
 		scorer: scorer,
 	}
@@ -39,7 +40,7 @@ func NewDefault() (*Detector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize detector with embedded data: %w", err)
 	}
-	
+
 	return New(l.GetDataset()), nil
 }
 
@@ -74,7 +75,7 @@ func (d *Detector) DetectPIIWithThreshold(words []string, threshold float64) typ
 
 	// Generate all possible name combinations
 	combinations := d.generateCombinations(cleanWords)
-	
+
 	// Score each combination and find the best one
 	bestCombo, bestScore := d.findBestCombination(combinations)
 
@@ -99,22 +100,42 @@ func (d *Detector) DetectPIIWithThreshold(words []string, threshold float64) typ
 	}
 }
 
-// cleanWords removes empty strings, trims whitespace, and filters invalid words
+// Score returns confidence and the number of words in the winning combination.
+// It uses the same scoring rules as DetectPII without building descriptive data.
+// Inputs outside two to six words, or without a positive score, return zeroes.
+func (d *Detector) Score(words []string) (confidence float64, used int) {
+	if len(words) < 2 || len(words) > 6 {
+		return 0, 0
+	}
+	var buf [6]string
+	cleaned := d.cleanWordsInto(buf[:0], words)
+	for i := 1; i < len(cleaned); i++ {
+		combo := types.NameCombination{FirstNames: cleaned[:i], Surnames: cleaned[i:]}
+		if score := d.scorer.ScoreCombination(combo); score > confidence {
+			confidence, used = score, len(cleaned)
+		}
+	}
+	return confidence, used
+}
+
+// cleanWords removes empty strings, trims whitespace, and filters invalid words.
 func (d *Detector) cleanWords(words []string) []string {
-	var cleaned []string
-	
+	return d.cleanWordsInto(make([]string, 0, len(words)), words)
+}
+
+func (d *Detector) cleanWordsInto(cleaned, words []string) []string {
 	for _, word := range words {
 		word = strings.TrimSpace(word)
 		if len(word) == 0 {
 			continue
 		}
-		
+
 		// Skip words that are clearly not names (too short, numbers, special chars)
 		if d.isValidNameWord(word) {
 			cleaned = append(cleaned, word)
 		}
 	}
-	
+
 	return cleaned
 }
 
@@ -124,58 +145,37 @@ func (d *Detector) isValidNameWord(word string) bool {
 	if len(word) < 2 {
 		return false
 	}
-	
+
 	// Must contain only letters (and possibly hyphens, apostrophes, dots)
 	for _, r := range word {
 		if !(unicode.IsLetter(r) || r == '-' || r == '\'' || r == '.') {
 			return false
 		}
 	}
-	
+
 	// Skip common non-name words
-	lowerWord := strings.ToLower(word)
-	commonWords := map[string]bool{
-		"the": true, "and": true, "or": true, "but": true, "in": true, "on": true,
-		"at": true, "to": true, "for": true, "of": true, "with": true, "by": true,
-		"is": true, "are": true, "was": true, "were": true, "be": true, "been": true,
-		"have": true, "has": true, "had": true, "do": true, "does": true, "did": true,
-		"will": true, "would": true, "could": true, "should": true, "may": true, "might": true,
-		"can": true, "must": true, "shall": true, "this": true, "that": true, "these": true,
-		"those": true, "a": true, "an": true, "it": true, "he": true, "she": true,
-		"they": true, "we": true, "you": true, "i": true, "me": true, "him": true,
-		"her": true, "them": true, "us": true, "my": true, "your": true, "his": true,
-		"our": true, "their": true, "its": true,
+	buf, n := lowerNameWord(word)
+	switch string(buf[:n]) {
+	case "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+		"is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did",
+		"will", "would", "could", "should", "may", "might", "can", "must", "shall", "this",
+		"that", "these", "those", "a", "an", "it", "he", "she", "they", "we", "you", "i",
+		"me", "him", "her", "them", "us", "my", "your", "his", "our", "their", "its":
+		return false
 	}
-	
-	return !commonWords[lowerWord]
+	return true
 }
 
 // isProbablyPreposition checks if a word is likely a preposition/connector
 // that shouldn't be counted as a first or last name
 func (d *Detector) isProbablyPreposition(word string) bool {
-	lowerWord := strings.ToLower(word)
-	// Common prepositions/connectors in multiple languages
-	prepositions := map[string]bool{
-		// Spanish
-		"de": true, "del": true, "la": true, "el": true,
-		"los": true, "las": true, "y": true,
-		// Portuguese
-		"da": true, "do": true, "dos": true, "das": true,
-		// French
-		"du": true, "le": true, "les": true,
-		// Dutch/German
-		"van": true, "von": true, "der": true, "den": true,
-		// English
-		"of": true, "and": true,
-	}
-	
-	return prepositions[lowerWord]
+	return isNamePreposition(word)
 }
 
 // generateCombinations creates all possible splits of words into first names and surnames
 func (d *Detector) generateCombinations(words []string) []types.NameCombination {
 	var combinations []types.NameCombination
-	
+
 	// Try all possible splits where at least 1 word is first name and 1 is surname
 	for i := 1; i < len(words); i++ {
 		combo := types.NameCombination{
@@ -184,7 +184,7 @@ func (d *Detector) generateCombinations(words []string) []types.NameCombination 
 		}
 		combinations = append(combinations, combo)
 	}
-	
+
 	return combinations
 }
 
@@ -192,7 +192,7 @@ func (d *Detector) generateCombinations(words []string) []types.NameCombination 
 func (d *Detector) findBestCombination(combinations []types.NameCombination) (types.NameCombination, float64) {
 	var bestCombo types.NameCombination
 	var bestScore float64
-	
+
 	for _, combo := range combinations {
 		score := d.scorer.ScoreCombination(combo)
 		if score > bestScore {
@@ -200,7 +200,7 @@ func (d *Detector) findBestCombination(combinations []types.NameCombination) (ty
 			bestCombo = combo
 		}
 	}
-	
+
 	return bestCombo, bestScore
 }
 
@@ -208,7 +208,7 @@ func (d *Detector) findBestCombination(combinations []types.NameCombination) (ty
 func (d *Detector) buildPattern(combo types.NameCombination) string {
 	firstCount := len(combo.FirstNames)
 	lastCount := len(combo.Surnames)
-	
+
 	return fmt.Sprintf("%d_first_%d_last", firstCount, lastCount)
 }
 
@@ -219,7 +219,7 @@ func (d *Detector) GetDatasetStats() map[string]interface{} {
 			"error": "dataset not loaded",
 		}
 	}
-	
+
 	return map[string]interface{}{
 		"first_names_count": len(d.scorer.dataset.FirstNames),
 		"last_names_count":  len(d.scorer.dataset.LastNames),
