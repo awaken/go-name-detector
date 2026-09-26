@@ -7,7 +7,7 @@ all: generate build
 generate:
 	@echo "Generating protobuf Go code..."
 	mkdir -p pkg/proto
-	export PATH=$$PATH:$$(go env GOPATH)/bin && protoc --go_out=. --go_opt=paths=source_relative proto/names.proto
+	export PATH=$$PATH:$$(go env GOPATH)/bin && protoc --go_out=. --go_opt=module=github.com/montevive/go-name-detector proto/names.proto
 	go mod tidy
 
 # Build the CLI tool

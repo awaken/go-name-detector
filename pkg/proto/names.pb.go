@@ -213,7 +213,7 @@ const file_proto_names_proto_rawDesc = "" +
 	"\vfirst_names\x18\x01 \x01(\v2\x12.names.NameDatasetR\n" +
 	"firstNames\x121\n" +
 	"\n" +
-	"last_names\x18\x02 \x01(\v2\x12.names.NameDatasetR\tlastNamesB\x1cZ\x1ago-name-detector/pkg/protob\x06proto3"
+	"last_names\x18\x02 \x01(\v2\x12.names.NameDatasetR\tlastNamesB1Z/github.com/montevive/go-name-detector/pkg/protob\x06proto3"
 
 var (
 	file_proto_names_proto_rawDescOnce sync.Once

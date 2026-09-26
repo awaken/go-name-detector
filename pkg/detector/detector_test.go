@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/montevive/go-name-detector/pkg/loader"
 	"github.com/montevive/go-name-detector/pkg/types"
 )
 
@@ -396,5 +397,48 @@ func TestScoreMatchesDetails(t *testing.T) {
 		if math.Abs(score-full.Confidence) > 1e-9 || used != len(full.Details.FirstNames)+len(full.Details.Surnames) {
 			t.Fatalf("%q: score %v, used %v; full %+v", text, score, used, full)
 		}
+	}
+}
+
+func TestAuditDecomposedNames(t *testing.T) {
+	d := New(createTestDataset())
+	want := d.DetectPII([]string{"José", "García"})
+	for _, words := range [][]string{{"Jose\u0301", "García"}, {"José", "Garci\u0301a"}, {"Jose\u0301", "Garci\u0301a"}} {
+		got := d.DetectPII(words)
+		if got.Confidence != want.Confidence || got.IsLikelyName != want.IsLikelyName {
+			t.Errorf("equivalent spelling %q = %+v; want confidence %v", words, got, want.Confidence)
+		}
+		if score, used := d.Score(words); score != want.Confidence || used != 2 {
+			t.Errorf("equivalent spelling score = %v, %d", score, used)
+		}
+	}
+}
+
+func TestAuditDetectorConstruction(t *testing.T) {
+	d := NewWithConfig(createTestDataset(), DefaultScoreConfig())
+	if d.GetDatasetStats()["first_names_count"] != 4 || d.GetDatasetStats()["last_names_count"] != 5 {
+		t.Errorf("dataset statistics = %v", d.GetDatasetStats())
+	}
+	for _, d := range []*Detector{{}, {scorer: NewScorer(nil, DefaultScoreConfig())}} {
+		if d.GetDatasetStats()["error"] != "dataset not loaded" {
+			t.Errorf("uninitialized statistics = %v", d.GetDatasetStats())
+		}
+	}
+	old := loader.EmbeddedData
+	t.Cleanup(func() { loader.EmbeddedData = old })
+	// Empty, present protobuf sections are a complete empty dataset.
+	loader.EmbeddedData = []byte{0x0a, 0, 0x12, 0}
+	if d, err := NewDefault(); err != nil || d.GetDatasetStats()["first_names_count"] != 0 {
+		t.Errorf("default empty fixture = %v, %v", d, err)
+	}
+	loader.EmbeddedData = []byte{0xff}
+	if _, err := NewDefault(); err == nil {
+		t.Error("invalid default data accepted")
+	}
+	if !d.isProbablyPreposition("de") || d.isProbablyPreposition("Smith") {
+		t.Error("connector classification changed")
+	}
+	if got := d.DetectPII([]string{"x", "Smith"}); got.Confidence != 0 || got.Details.Pattern != "insufficient_words" {
+		t.Errorf("single-letter token was not filtered: %+v", got)
 	}
 }

@@ -40,6 +40,7 @@ import (
 
 // Countries relevant to Spanish/European deployments; override with -countries.
 const defaultCountries = "ES,MX,AR,CO,CL,PE,VE,EC,UY,PY,BO,CR,PA,DO,GT,HN,SV,NI,CU,US,GB,IE,FR,DE,IT,PT,BR,NL,BE,CH,AT,RO,PL,MA"
+const maxBloomProbes = 64
 
 func main() {
 	var (
@@ -51,6 +52,15 @@ func main() {
 		out          = flag.String("out", "names.bloom", "output file path")
 	)
 	flag.Parse()
+	if math.IsNaN(*bitsPerEntry) || math.IsInf(*bitsPerEntry, 0) || *bitsPerEntry <= 0 {
+		fatal("-bits-per-entry must be finite and positive")
+	}
+	if *k == 0 || uint64(*k) > maxBloomProbes {
+		fatal("-k must be between 1 and %d", maxBloomProbes)
+	}
+	if *maxRank < 0 || uint64(*maxRank) > math.MaxInt32 {
+		fatal("-max-rank must be between 0 and %d", math.MaxInt32)
+	}
 
 	l, err := loader.NewWithEmbeddedData()
 	if err != nil {
@@ -73,6 +83,11 @@ func main() {
 	keys := selectNames(source, countries, int32(*maxRank))
 	if len(keys) == 0 {
 		fatal("no names selected — check -countries / -max-rank")
+	}
+	bits := math.Ceil(float64(len(keys)) * *bitsPerEntry)
+	// Float conversion rounds integer limits up; equality can overflow too.
+	if bits >= math.MaxUint64-7 || bits >= float64(int(^uint(0)>>1))*8 {
+		fatal("requested filter is too large")
 	}
 
 	filter := newBloom(len(keys), *bitsPerEntry, uint32(*k))
@@ -108,7 +123,7 @@ func selectNames(source map[string]*types.NameData, countries map[string]bool, m
 }
 
 func fold(s string) string {
-	t := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+	t := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)))
 	out, _, err := transform.String(t, s)
 	if err != nil {
 		out = s

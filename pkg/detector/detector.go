@@ -8,6 +8,7 @@ import (
 
 	"github.com/montevive/go-name-detector/pkg/loader"
 	"github.com/montevive/go-name-detector/pkg/types"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Detector handles PII name detection
@@ -146,11 +147,20 @@ func (d *Detector) isValidNameWord(word string) bool {
 		return false
 	}
 
-	// Must contain only letters (and possibly hyphens, apostrophes, dots)
-	for _, r := range word {
-		if !(unicode.IsLetter(r) || r == '-' || r == '\'' || r == '.') {
+	// Validate canonical text while preserving the caller's spelling.
+	previousLetter := false
+	for _, r := range norm.NFC.String(word) {
+		if unicode.IsLetter(r) {
+			previousLetter = true
+			continue
+		}
+		if unicode.IsMark(r) && previousLetter {
+			continue
+		}
+		if r != '-' && r != '\'' && r != '.' {
 			return false
 		}
+		previousLetter = false
 	}
 
 	// Skip common non-name words

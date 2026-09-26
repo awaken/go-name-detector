@@ -118,4 +118,4 @@ def export_to_protobuf():
     return True
 
 if __name__ == "__main__":
-    export_to_protobuf()
+    sys.exit(0 if export_to_protobuf() else 1)

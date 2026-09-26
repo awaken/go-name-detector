@@ -116,7 +116,7 @@ func showStats(d *detector.Detector, l *loader.Loader) {
 	fmt.Printf("  First names: %v\n", detectorStats["first_names_count"])
 	fmt.Printf("  Last names:  %v\n", detectorStats["last_names_count"])
 	fmt.Printf("  Loaded:      %v\n", loaderStats["loaded"])
-	
+
 	total := detectorStats["first_names_count"].(int) + detectorStats["last_names_count"].(int)
 	fmt.Printf("  Total names: %d\n", total)
 }
@@ -137,7 +137,7 @@ func processBatchFile(filename string, d *detector.Detector) {
 	lines := strings.Split(string(content), "\n")
 	var processed, detected int
 
-	fmt.Printf("Processing %d lines from %s...\n", len(lines), filename)
+	fmt.Fprintf(os.Stderr, "Processing %d lines from %s...\n", len(lines), filename)
 
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
@@ -174,8 +174,12 @@ func processBatchFile(filename string, d *detector.Detector) {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "\nSummary: %d processed, %d detected as PII (%.1f%%)\n", 
-		processed, detected, float64(detected)/float64(processed)*100)
+	percent := 0.0
+	if processed > 0 {
+		percent = float64(detected) / float64(processed) * 100
+	}
+	fmt.Fprintf(os.Stderr, "\nSummary: %d processed, %d detected as PII (%.1f%%)\n",
+		processed, detected, percent)
 }
 
 func outputJSON(result types.PIIResult) {
@@ -188,7 +192,7 @@ func outputJSON(result types.PIIResult) {
 
 func outputHuman(result types.PIIResult, words []string) {
 	input := strings.Join(words, " ")
-	
+
 	if result.IsLikelyName {
 		fmt.Printf("✓ Likely PII name (%.1f%% confidence)\n", result.Confidence*100)
 		fmt.Printf("  Input: %s\n", input)
@@ -229,7 +233,7 @@ func init() {
 		"../data/combined_names.pb.gz",
 		"../../data/combined_names.pb.gz",
 	}
-	
+
 	for _, path := range possiblePaths {
 		if pathExists(path) {
 			*dataPath = path

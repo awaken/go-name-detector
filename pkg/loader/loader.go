@@ -48,8 +48,8 @@ func (l *Loader) LoadFromFile(filename string) error {
 		return fmt.Errorf("failed to unmarshal protobuf: %w", err)
 	}
 
-	// Convert to internal format
-	l.convertToInternalFormat(&pbDataset)
+	// Publish only a fully decoded dataset.
+	l.dataset = convertToInternalFormat(&pbDataset)
 	l.loaded = true
 
 	return nil
@@ -87,8 +87,8 @@ func (l *Loader) LoadFromBytes(data []byte) error {
 		return fmt.Errorf("failed to unmarshal protobuf: %w", err)
 	}
 
-	// Convert to internal format
-	l.convertToInternalFormat(&pbDataset)
+	// Publish only a fully decoded dataset.
+	l.dataset = convertToInternalFormat(&pbDataset)
 	l.loaded = true
 
 	return nil
@@ -100,39 +100,35 @@ func (l *Loader) LoadSeparateFiles(firstNamesFile, lastNamesFile string) error {
 		return nil // Already loaded
 	}
 
-	// Load first names
-	if err := l.loadSingleDataset(firstNamesFile, true); err != nil {
+	firstNames, err := l.loadSingleDataset(firstNamesFile)
+	if err != nil {
 		return fmt.Errorf("failed to load first names: %w", err)
 	}
 
-	// Load last names
-	if err := l.loadSingleDataset(lastNamesFile, false); err != nil {
+	lastNames, err := l.loadSingleDataset(lastNamesFile)
+	if err != nil {
 		return fmt.Errorf("failed to load last names: %w", err)
 	}
 
+	l.dataset = &types.NameDataset{FirstNames: firstNames, LastNames: lastNames}
 	l.loaded = true
 	return nil
 }
 
 // loadSingleDataset loads a single name dataset
-func (l *Loader) loadSingleDataset(filename string, isFirstNames bool) error {
+func (l *Loader) loadSingleDataset(filename string) (map[string]*types.NameData, error) {
 	data, err := l.readFile(filename)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var pbDataset names.NameDataset
 	if err := proto.Unmarshal(data, &pbDataset); err != nil {
-		return fmt.Errorf("failed to unmarshal protobuf: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal protobuf: %w", err)
 	}
 
-	// Convert entries
-	targetMap := l.dataset.LastNames
-	if isFirstNames {
-		targetMap = l.dataset.FirstNames
-	}
-
-	for _, entry := range pbDataset.Entries {
+	targetMap := make(map[string]*types.NameData, len(pbDataset.GetEntries()))
+	for _, entry := range pbDataset.GetEntries() {
 		nameData := &types.NameData{
 			Country: entry.Country,
 			Gender:  entry.Gender,
@@ -144,7 +140,7 @@ func (l *Loader) loadSingleDataset(filename string, isFirstNames bool) error {
 		targetMap[normalizedName] = nameData
 	}
 
-	return nil
+	return targetMap, nil
 }
 
 // readFile reads a file (with optional gzip decompression)
@@ -174,33 +170,38 @@ func (l *Loader) readFile(filename string) ([]byte, error) {
 	return os.ReadFile(filename)
 }
 
-// convertToInternalFormat converts protobuf data to internal format
-func (l *Loader) convertToInternalFormat(pbDataset *names.CombinedNameDataset) {
+// convertToInternalFormat converts protobuf data to internal format.
+func convertToInternalFormat(pbDataset *names.CombinedNameDataset) *types.NameDataset {
+	dataset := &types.NameDataset{
+		FirstNames: make(map[string]*types.NameData),
+		LastNames:  make(map[string]*types.NameData),
+	}
 	// Convert first names
-	for _, entry := range pbDataset.FirstNames.Entries {
+	for _, entry := range pbDataset.GetFirstNames().GetEntries() {
 		nameData := &types.NameData{
 			Country: entry.Country,
 			Gender:  entry.Gender,
 			Rank:    entry.Rank,
 		}
-		
+
 		// Store with normalized key for case-insensitive lookup
 		normalizedName := strings.ToUpper(strings.TrimSpace(entry.Name))
-		l.dataset.FirstNames[normalizedName] = nameData
+		dataset.FirstNames[normalizedName] = nameData
 	}
 
 	// Convert last names
-	for _, entry := range pbDataset.LastNames.Entries {
+	for _, entry := range pbDataset.GetLastNames().GetEntries() {
 		nameData := &types.NameData{
 			Country: entry.Country,
 			Gender:  entry.Gender,
 			Rank:    entry.Rank,
 		}
-		
+
 		// Store with normalized key for case-insensitive lookup
 		normalizedName := strings.ToUpper(strings.TrimSpace(entry.Name))
-		l.dataset.LastNames[normalizedName] = nameData
+		dataset.LastNames[normalizedName] = nameData
 	}
+	return dataset
 }
 
 // GetDataset returns the loaded dataset

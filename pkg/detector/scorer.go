@@ -3,6 +3,7 @@ package detector
 
 import (
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/montevive/go-name-detector/pkg/types"
@@ -82,7 +83,9 @@ func (s *Scorer) ScoreCombination(combo types.NameCombination) float64 {
 	}
 
 	// Add bonus for multiple valid names
-	if componentCount > 2 {
+	matched := len(firstNamesData) + len(surnamesData)
+	connector := slices.ContainsFunc(combo.FirstNames, isNamePreposition) || slices.ContainsFunc(combo.Surnames, isNamePreposition)
+	if matched > 2 || matched > 1 && connector {
 		averageScore += s.config.MultipleNamesBonus
 	}
 
@@ -92,6 +95,8 @@ func (s *Scorer) ScoreCombination(combo types.NameCombination) float64 {
 	// Clamp to [0, 1]
 	if averageScore > 1.0 {
 		averageScore = 1.0
+	} else if averageScore < 0 {
+		averageScore = 0
 	}
 
 	return averageScore
@@ -136,13 +141,15 @@ func (s *Scorer) calculatePopularityScore(nameData *types.NameData) float64 {
 
 	// Find the best (lowest) rank across all countries
 	minRank := int32(math.MaxInt32)
+	found := false
 	for _, rank := range nameData.Rank {
-		if rank > 0 && rank < minRank {
+		if rank > 0 && (!found || rank < minRank) {
 			minRank = rank
+			found = true
 		}
 	}
 
-	if minRank == int32(math.MaxInt32) {
+	if !found {
 		return 0.0
 	}
 

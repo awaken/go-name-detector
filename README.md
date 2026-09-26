@@ -13,7 +13,7 @@ This fork contains the scoring fixes and allocation optimizations used by Flower
 Keep upstream import paths and select this fork with a module replacement:
 
 ```sh
-go mod edit -replace=github.com/montevive/go-name-detector=github.com/awaken/go-name-detector@v1.0.2
+go mod edit -replace=github.com/montevive/go-name-detector=github.com/awaken/go-name-detector@v1.0.3
 go mod tidy
 ```
 
